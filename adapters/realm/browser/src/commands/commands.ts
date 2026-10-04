@@ -3,6 +3,7 @@ import {
   ElementQuerySchema,
   INSPECT_IN_VIEWPORT_FIELD,
   INSPECT_REVEAL_ARG,
+  MatchArg,
   ReticleCommand,
   SnapshotMode,
   TRANSPORT_LIMITS,
@@ -359,6 +360,7 @@ export function createCommandRegistry(): Map<string, CommandHandler> {
       undefined,
       undefined,
       true === args['diagnose'],
+      true === args[MatchArg.FULL_TEXT],
     ),
   );
   // Each act ends with a canvas sample, before it answers, so the frame it drew is tied to it.
