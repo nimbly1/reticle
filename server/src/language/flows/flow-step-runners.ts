@@ -13,8 +13,10 @@ import {
   DriftReason,
   PredicateKind,
   QueryBy,
+  ReplayStatus,
   ReticleCommand,
   type FlowAnchor,
+  type FlowReplayResult,
   type FlowStep,
   type FlowStepResult,
   type Predicate,
@@ -411,6 +413,61 @@ export function anchorPrecondition(anchor: FlowAnchor): Predicate | undefined {
 }
 
 /**
+ * The sub-step, among live[from, to), whose ref the page said it could not find.
+ *
+ * The page echoes the ref in "ref 'x' no longer resolves to an element". A ref it shortened, or one
+ * that is not among these, gives no answer, and the caller must not guess which actions already ran.
+ */
+function staleSubStep(
+  error: string,
+  live: readonly { ref: string }[],
+  from: number,
+  to: number,
+): number | undefined {
+  const named = /ref '([^']*)'/.exec(error)?.[1];
+  if (named === undefined) return undefined;
+  const at = live.slice(from, to).findIndex((one) => one.ref === named);
+  return at < 0 ? undefined : from + at;
+}
+
+/**
+ * The honest answer when a step's target kept going stale.
+ *
+ * Replay looks the element up again and goes on while that gets it further, so a step still stale
+ * after that is one the page re-rendered around faster than it could be targeted. Reporting it as
+ * `error` with the browser's own sentence says "your app broke", which is a claim nothing observed
+ * and sends a reader into product code that is fine. It is the same bucket as a document that went
+ * away: the steps before it are real and are attached, the step that could not be acted on is among
+ * them with its index, and nothing after it ran.
+ *
+ * Left alone, so the ordinary verdict stands, when anything else is in the run: a drifted anchor is
+ * drift whatever else happened, and a failure that is not staleness is a failure.
+ */
+export function staleTargetResult(
+  name: string,
+  steps: readonly FlowStepResult[],
+): FlowReplayResult | undefined {
+  if (steps.some((step) => step.drift !== undefined)) return undefined;
+  const failed = steps.filter((step) => !step.ok);
+  const [only] = failed;
+  if (failed.length !== 1 || only === undefined || !isStaleRefError(only.error)) return undefined;
+  return {
+    name,
+    status: ReplayStatus.UNVERIFIABLE,
+    steps: [...steps],
+    unverifiable: {
+      reason:
+        `step ${String(only.step)} could not be acted on: its target kept going stale, because the ` +
+        `page re-rendered between finding the element and using it, and the replay looked it up ` +
+        `again for as long as that got it further. The steps before it are reported and nothing ` +
+        `after it ran. Nothing here says the app failed. If an earlier step makes the page ` +
+        `re-render, record that step's consequence with \`expect\` so the replay waits for the new ` +
+        `render before it moves on.`,
+    },
+  };
+}
+
+/**
  * Run an act_sequence step: resolve every sub-step's OWN anchor, then dispatch the whole thing as one
  * ACT_SEQUENCE — the same shape `replayProgram` already uses, so a recorded sequence and a saved one
  * execute identically.
@@ -430,37 +487,58 @@ export async function runSequenceStep(
   /** Testids whose presence is deliberately NOT asserted — the LLM-output case. */
   dynamic: ReadonlySet<string> = new Set(),
 ): Promise<FlowStepResult> {
-  const live: { ref: string; action: string; args: Record<string, unknown> }[] = [];
-  for (const [subIndex, sub] of subs.entries()) {
+  type LiveSubStep = { ref: string; action: string; args: Record<string, unknown> };
+
+  /**
+   * Find one sub-step's element as the page is NOW. Either the live step to dispatch, or the step
+   * result that ends the run: a degraded anchor, or one that is no longer on the page.
+   */
+  const resolveSub = async (
+    sub: FlowStep,
+    subIndex: number,
+  ): Promise<{ live: LiveSubStep } | { stop: FlowStepResult }> => {
     const label = `${anchorLabel(sub.anchor)} (sub-step ${String(subIndex)})`;
     const queryArgs = anchorQueryArgs(sub.anchor);
-    if (null === queryArgs) return degradedStepResult(step, index, label);
+    if (null === queryArgs) return { stop: degradedStepResult(step, index, label) };
     const { refs, hint } = await resolveQuery(session, queryArgs, sleep);
     const ref = refs[0];
     if (ref === undefined) {
       return {
-        step: index,
-        tool: step.tool,
-        anchor: label,
-        ok: false,
-        drift:
-          sub.anchor.kind === AnchorKind.TESTID
-            ? testidDrift(sub.anchor.value, hint)
-            : {
-                reasonKind: DriftReason.COMPONENT_NOT_FOUND,
-                reason: `anchor ${label} not found`,
-                anchor: label,
-                nearest: null,
-              },
+        stop: {
+          step: index,
+          tool: step.tool,
+          anchor: label,
+          ok: false,
+          drift:
+            sub.anchor.kind === AnchorKind.TESTID
+              ? testidDrift(sub.anchor.value, hint)
+              : {
+                  reasonKind: DriftReason.COMPONENT_NOT_FOUND,
+                  reason: `anchor ${label} not found`,
+                  anchor: label,
+                  nearest: null,
+                },
+        },
       };
     }
-    live.push({
-      ref,
-      action: sub.action ?? '',
-      // Each sub-step carries its OWN anchor, so each gets its own field name. A sequence that ends
-      // in a login is the shape this was reported on, and the sub-step is where the fill lives.
-      args: replayActionArgs(sub.args, confirmDangerous, anchorFieldName(sub.anchor)),
-    });
+    return {
+      live: {
+        ref,
+        action: sub.action ?? '',
+        // Each sub-step carries its OWN anchor, so each gets its own field name. A sequence that ends
+        // in a login is the shape this was reported on, and the sub-step is where the fill lives.
+        args: replayActionArgs(sub.args, confirmDangerous, anchorFieldName(sub.anchor)),
+      },
+    };
+  };
+
+  // Every anchor is checked before anything runs, so a sub-step that has drifted away is reported as
+  // drift and not discovered half way through a sequence that has already acted.
+  const live: LiveSubStep[] = [];
+  for (const [subIndex, sub] of subs.entries()) {
+    const resolved = await resolveSub(sub, subIndex);
+    if ('stop' in resolved) return resolved.stop;
+    live.push(resolved.live);
   }
   const result: FlowStepResult = {
     step: index,
@@ -470,18 +548,71 @@ export async function runSequenceStep(
   };
 
   /** One dispatch through the SAME command either way, so batched and walked replay identically. */
-  const dispatch = async (steps: typeof live): Promise<boolean> => {
+  const send = async (
+    steps: readonly LiveSubStep[],
+  ): Promise<Awaited<ReturnType<typeof session.command>>> => {
     session.beginAction?.(ReticleTool.FLOW_REPLAY, { steps: steps.length });
-    let act;
     try {
-      act = await session.command(ReticleCommand.ACT_SEQUENCE, { steps });
+      return await session.command(ReticleCommand.ACT_SEQUENCE, { steps });
     } finally {
       session.finishAction?.();
     }
-    if (act.ok) return true;
-    result.ok = false;
-    result.error = replayDestructiveActionHint(act.error ?? 'command failed');
-    return false;
+  };
+
+  /**
+   * Run sub-steps [from, to), and survive the page re-rendering under them.
+   *
+   * The refs were resolved before anything ran, and the first action of a sequence is allowed to
+   * re-render the page, so by the time a later sub-step is reached its ref may be dead. The same
+   * anchor is almost always still there under a new ref; what was missing is a second look.
+   *
+   * The page names the ref it could not find, which says WHICH sub-step failed and so which ones
+   * already ran. Only the rest is resolved again and sent, so nothing acts twice: starting over is
+   * what turns one click into two. A stale ref is the only failure retried, and the retry goes on
+   * only while it gets further. A sub-step that is stale again at the same point is a target that
+   * does not hold still, and the run says so, with how far it got.
+   */
+  const dispatchFrom = async (from: number, to: number): Promise<boolean> => {
+    let start = from;
+    let staleBefore = -1;
+    for (;;) {
+      const act = await send(live.slice(start, to));
+      if (act.ok) return true;
+      const error = act.error ?? 'command failed';
+      if (!isStaleRefError(error)) {
+        result.ok = false;
+        result.error = replayDestructiveActionHint(error);
+        return false;
+      }
+      const staleAt = staleSubStep(error, live, start, to);
+      if (staleAt === undefined) {
+        result.ok = false;
+        result.error =
+          error +
+          ' (which sub-step that was could not be told, so the ones before it may have run)';
+        return false;
+      }
+      if (staleAt <= staleBefore) {
+        result.ok = false;
+        result.error = `${error} (sub-step ${String(staleAt)} of ${String(subs.length)}; ${String(staleAt)} before it ran)`;
+        return false;
+      }
+      staleBefore = staleAt;
+      await waitForReaction(session, 0, STALE_REF_GRACE_MS, { sleep });
+      for (let at = staleAt; at < to; at += 1) {
+        const sub = subs[at];
+        if (sub === undefined) continue;
+        const resolved = await resolveSub(sub, at);
+        if ('stop' in resolved) {
+          result.ok = false;
+          result.anchor = resolved.stop.anchor;
+          if (resolved.stop.drift !== undefined) result.drift = resolved.stop.drift;
+          return false;
+        }
+        live[at] = resolved.live;
+      }
+      start = staleAt;
+    }
   };
 
   /** The sub-step's own expectation, unless its testid is deliberately unasserted. */
@@ -518,13 +649,12 @@ export async function runSequenceStep(
    */
   const declaring = subs.some((sub) => declaredBy(sub) !== undefined);
   if (!declaring) {
-    await dispatch(live);
+    await dispatchFrom(0, live.length);
     return result;
   }
   for (const [subIndex, sub] of subs.entries()) {
-    const one = live[subIndex];
-    if (one === undefined) continue;
-    if (!(await dispatch([one]))) return result;
+    if (live[subIndex] === undefined) continue;
+    if (!(await dispatchFrom(subIndex, subIndex + 1))) return result;
     const testid = declaredBy(sub);
     if (testid !== undefined && !(await assertDeclared(testid))) return result;
   }

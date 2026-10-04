@@ -26,7 +26,7 @@ import { carryReticleIdentity } from '@/surface/tools/lease-tools.js';
 import type { SessionManager } from '@/portal/session/session-manager.js';
 import type { Session } from '@/portal/session/session.js';
 import { replayFlow } from './flow-replay.js';
-import { anchorPrecondition, anchorQueryArgs } from './flow-step-runners.js';
+import { anchorPrecondition, anchorQueryArgs, staleTargetResult } from './flow-step-runners.js';
 import { queryRefs } from './replay.js';
 import { assertSuccess, dynamicTestids, successLabel, SUCCESS_STEP_TOOL } from './flow-success.js';
 import { buildDecision, unverifiableReason } from './decision.js';
@@ -792,6 +792,8 @@ export async function replayNamedFlow(
     };
     steps.push(row);
   }
+  const staleTarget = staleTargetResult(name, steps);
+  if (staleTarget !== undefined) return staleTarget;
   const driftSteps = steps.filter((s) => s.drift !== undefined).length;
   const allOk = steps.every((s) => s.ok);
   const status = driftSteps > 0 ? ReplayStatus.DRIFT : allOk ? ReplayStatus.OK : ReplayStatus.ERROR;
