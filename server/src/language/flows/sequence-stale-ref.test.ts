@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   ActionType,
   AnchorKind,
+  DriftReason,
   FlowStepTool,
   ReticleCommand,
   type CommandResult,
   type FlowStep,
+  type FlowStepResult,
 } from '@reticlehq/core';
 import { runSequenceStep } from './flow-step-runners.js';
 import type { FlowReplaySession } from './flow-replay.js';
@@ -30,6 +32,8 @@ interface PageOptions {
   readonly alwaysStale?: boolean;
   /** Fail this testid's action for a reason that is not staleness. */
   readonly failFor?: string;
+  /** Once the page has re-rendered, this testid is found twice, so which one is meant is no longer clear. */
+  readonly doubledAfterRerender?: string;
 }
 
 function rerenderingPage(options: PageOptions = {}): {
@@ -46,11 +50,12 @@ function rerenderingPage(options: PageOptions = {}): {
       if (ReticleCommand.QUERY === name) {
         const ref = `g${String(generation)}:${String(args['value'])}`;
         if (true === options.alwaysStale) generation += 1;
+        const doubled = generation > 0 && args['value'] === options.doubledAfterRerender;
         return Promise.resolve({
           kind: 'command_result',
           id: 'q',
           ok: true,
-          result: { elements: [{ ref }] },
+          result: { elements: doubled ? [{ ref }, { ref: `${ref}-other` }] : [{ ref }] },
         } as unknown as CommandResult);
       }
       if (ReticleCommand.ACT_SEQUENCE === name) {
@@ -104,10 +109,7 @@ const parent: FlowStep = {
   args: {},
 };
 
-const run = (
-  subs: FlowStep[],
-  session: FlowReplaySession,
-): Promise<{ ok: boolean; error?: string }> =>
+const run = (subs: FlowStep[], session: FlowReplaySession): Promise<FlowStepResult> =>
   runSequenceStep(session, parent, 3, subs, false, () => Promise.resolve());
 
 describe('a sequence dispatched as one batch survives a re-render part way through', () => {
@@ -133,6 +135,35 @@ describe('a sequence dispatched as one batch survives a re-render part way throu
     expect(result.ok).toBe(false);
     expect(result.error).toContain('disabled');
     expect(batches()).toBe(1);
+    expect(performed).toEqual(['fill']);
+  });
+});
+
+describe('a re-render that makes the retry unsafe is reported, not guessed through', () => {
+  it('does not start again when two sub-steps share an element, because it cannot tell which one failed', async () => {
+    // Both sub-steps hold the same ref. The first one runs and re-renders the page, so the second
+    // one is the stale one, but the page only names the ref, and the first sub-step has it too.
+    // Starting from the first would click it a second time.
+    const { session, performed, batches } = rerenderingPage({ rerenderAfter: ['save'] });
+    const result = await run([sub('save'), sub('save')], session);
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no longer resolves to an element/);
+    expect(result.error).toMatch(/could not be told/);
+    expect(performed).toEqual(['save']);
+    expect(batches()).toBe(1);
+  });
+
+  it('reports drift when the re-render made an anchor match several elements', async () => {
+    // After `fill`, `submit` is found twice. Taking the first of them would act on an element the
+    // recording may not have meant and report success.
+    const { session, performed } = rerenderingPage({
+      rerenderAfter: ['fill'],
+      doubledAfterRerender: 'submit',
+    });
+    const result = await run([sub('fill'), sub('submit'), sub('close')], session);
+    expect(result.ok).toBe(false);
+    expect(result.drift?.reasonKind).toBe(DriftReason.ANCHOR_AMBIGUOUS);
+    // Nothing was acted on after the ambiguity, and what ran before it ran once.
     expect(performed).toEqual(['fill']);
   });
 });

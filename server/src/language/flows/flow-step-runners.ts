@@ -412,11 +412,33 @@ export function anchorPrecondition(anchor: FlowAnchor): Predicate | undefined {
   return undefined;
 }
 
+/** What is added to a stale-ref error when it cannot be traced to one sub-step of the sequence. */
+const STALE_SUB_STEP_UNKNOWN =
+  ' (which sub-step that was could not be told, so the ones before it may have run)';
+
+/** Where a ref that stayed stale sat in the sequence, and that every sub-step before it ran. */
+const staleSubStepPosition = (at: number, total: number): string =>
+  ` (sub-step ${String(at)} of ${String(total)}; ${String(at)} before it ran)`;
+
+/**
+ * Why a step whose target kept going stale is unverifiable, as the replay result tells a reader.
+ * `step` is the index of the step that could not be acted on.
+ */
+const staleTargetReason = (step: number): string =>
+  `step ${String(step)} could not be acted on: its target kept going stale, because the ` +
+  `page re-rendered between finding the element and using it, and the replay looked it up ` +
+  `again for as long as that got it further. The steps before it are reported and nothing ` +
+  `after it ran. Nothing here says the app failed. If an earlier step makes the page ` +
+  `re-render, record that step's consequence with \`expect\` so the replay waits for the new ` +
+  `render before it moves on.`;
+
 /**
  * The sub-step, among live[from, to), whose ref the page said it could not find.
  *
  * The page echoes the ref in "ref 'x' no longer resolves to an element". A ref it shortened, or one
- * that is not among these, gives no answer, and the caller must not guess which actions already ran.
+ * that is not among these, gives no answer. Neither does a ref that two sub-steps share: the first of
+ * them may already have run, and may be what re-rendered the page, which makes the later one the stale
+ * one, and nothing in the message says so. The caller must not guess which actions already ran.
  */
 function staleSubStep(
   error: string,
@@ -426,8 +448,11 @@ function staleSubStep(
 ): number | undefined {
   const named = /ref '([^']*)'/.exec(error)?.[1];
   if (named === undefined) return undefined;
-  const at = live.slice(from, to).findIndex((one) => one.ref === named);
-  return at < 0 ? undefined : from + at;
+  const sharing = live.flatMap((one, at) =>
+    at >= from && at < to && one.ref === named ? [at] : [],
+  );
+  const [only] = sharing;
+  return 1 === sharing.length ? only : undefined;
 }
 
 /**
@@ -455,15 +480,7 @@ export function staleTargetResult(
     name,
     status: ReplayStatus.UNVERIFIABLE,
     steps: [...steps],
-    unverifiable: {
-      reason:
-        `step ${String(only.step)} could not be acted on: its target kept going stale, because the ` +
-        `page re-rendered between finding the element and using it, and the replay looked it up ` +
-        `again for as long as that got it further. The steps before it are reported and nothing ` +
-        `after it ran. Nothing here says the app failed. If an earlier step makes the page ` +
-        `re-render, record that step's consequence with \`expect\` so the replay waits for the new ` +
-        `render before it moves on.`,
-    },
+    unverifiable: { reason: staleTargetReason(only.step) },
   };
 }
 
@@ -492,15 +509,25 @@ export async function runSequenceStep(
   /**
    * Find one sub-step's element as the page is NOW. Either the live step to dispatch, or the step
    * result that ends the run: a degraded anchor, or one that is no longer on the page.
+   *
+   * `afterRerender` is the second look, taken because the page re-rendered under a sub-step. An anchor
+   * that now matches several elements is drift there, as it is for a single step's retry: the first of
+   * the new matches may be an element the recording did not mean, and acting on it would report a pass
+   * for a click nobody can attribute. The first look keeps taking the first match.
    */
   const resolveSub = async (
     sub: FlowStep,
     subIndex: number,
+    afterRerender = false,
   ): Promise<{ live: LiveSubStep } | { stop: FlowStepResult }> => {
     const label = `${anchorLabel(sub.anchor)} (sub-step ${String(subIndex)})`;
     const queryArgs = anchorQueryArgs(sub.anchor);
     if (null === queryArgs) return { stop: degradedStepResult(step, index, label) };
     const { refs, hint } = await resolveQuery(session, queryArgs, sleep);
+    const ambiguous = afterRerender ? ambiguityDrift(sub.anchor, refs) : null;
+    if (ambiguous !== null) {
+      return { stop: { step: index, tool: step.tool, anchor: label, ok: false, drift: ambiguous } };
+    }
     const ref = refs[0];
     if (ref === undefined) {
       return {
@@ -567,10 +594,11 @@ export async function runSequenceStep(
    * anchor is almost always still there under a new ref; what was missing is a second look.
    *
    * The page names the ref it could not find, which says WHICH sub-step failed and so which ones
-   * already ran. Only the rest is resolved again and sent, so nothing acts twice: starting over is
-   * what turns one click into two. A stale ref is the only failure retried, and the retry goes on
-   * only while it gets further. A sub-step that is stale again at the same point is a target that
-   * does not hold still, and the run says so, with how far it got.
+   * already ran, as long as no other sub-step holds the same ref. Only the rest is resolved again and
+   * sent, so nothing acts twice: starting over is what turns one click into two. A stale ref is the
+   * only failure retried, and the retry goes on only while it gets further. A sub-step that is stale
+   * again at the same point is a target that does not hold still, and the run says so, with how far
+   * it got.
    */
   const dispatchFrom = async (from: number, to: number): Promise<boolean> => {
     let start = from;
@@ -587,14 +615,12 @@ export async function runSequenceStep(
       const staleAt = staleSubStep(error, live, start, to);
       if (staleAt === undefined) {
         result.ok = false;
-        result.error =
-          error +
-          ' (which sub-step that was could not be told, so the ones before it may have run)';
+        result.error = error + STALE_SUB_STEP_UNKNOWN;
         return false;
       }
       if (staleAt <= staleBefore) {
         result.ok = false;
-        result.error = `${error} (sub-step ${String(staleAt)} of ${String(subs.length)}; ${String(staleAt)} before it ran)`;
+        result.error = error + staleSubStepPosition(staleAt, subs.length);
         return false;
       }
       staleBefore = staleAt;
@@ -602,7 +628,7 @@ export async function runSequenceStep(
       for (let at = staleAt; at < to; at += 1) {
         const sub = subs[at];
         if (sub === undefined) continue;
-        const resolved = await resolveSub(sub, at);
+        const resolved = await resolveSub(sub, at, true);
         if ('stop' in resolved) {
           result.ok = false;
           result.anchor = resolved.stop.anchor;
