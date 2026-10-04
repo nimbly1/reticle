@@ -526,7 +526,9 @@ export function describe(
   if (value !== undefined && value.length > 0) {
     base.value = value;
   }
-  if (text.length > 0 && text !== name) {
+  // Skipped when it only repeats the name, to save the bytes. Not in full-text mode: a fieldset's name
+  // IS its legend, and the caller there is going to judge the text, so a missing one reads as empty.
+  if (text.length > 0 && (fullText || text !== name)) {
     base.text = text;
   }
   // DOM-only lookup on purpose: describe() runs once per matched element, so the adapter's fiber walk
