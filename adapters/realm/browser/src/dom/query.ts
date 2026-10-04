@@ -516,6 +516,7 @@ export function matchQuery(
   query: ElementQuery,
   state?: ElementState,
   limit: number = MAX_DESCRIBED,
+  fullText = false,
 ): MatchResult {
   // NO blanket try/catch here. It would turn ANY exception during candidate-finding into
   // `elements = []`, which is the same lie as the `default` arm above: a query that could not run
@@ -539,7 +540,7 @@ export function matchQuery(
   // from unfiltered single-match and snapshot-wide describes to avoid bloat (#398).
   const stampViewport = described.length > 1 || ElementState.IN_VIEWPORT === state;
   const descriptors: ElementDescriptor[] = described.map((el) => {
-    let base = describe(el, visMemo);
+    let base = describe(el, visMemo, fullText);
     if (
       stampViewport &&
       isInViewport(el, visMemo) &&

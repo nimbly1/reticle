@@ -309,12 +309,15 @@ async function evaluatePredicateRaw(
           ? {}
           : { scope: predicate.scope, ...(true === predicate.self ? { self: true } : {}) }),
       };
+      // A property is judged on the text itself, so a predicate that carries one asks the page for
+      // all of it; a plain presence check reads nothing from the descriptor and keeps the short form.
       const found = await evalElement(
         session,
         query,
         true === predicate.visible ? ElementState.VISIBLE : undefined,
         predicate.absent ?? false,
         diagnose,
+        undefined !== predicate.satisfies,
       );
       if (undefined === predicate.satisfies) return found;
       return withTextProperty(
