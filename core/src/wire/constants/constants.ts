@@ -988,5 +988,3 @@ export const MessageKind = {
 } as const;
 export type MessageKind = (typeof MessageKind)[keyof typeof MessageKind];
 
-export { LeaseNotReadyReason } from './lease-not-ready.js';
-export type { LeaseNotReadyReason } from './lease-not-ready.js';
