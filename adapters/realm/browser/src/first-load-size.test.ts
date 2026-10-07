@@ -329,6 +329,7 @@ const MAX_FIRST_LOAD_BYTES = 253_000;
  * `hud.used` event, so it loads with the page. Measured 248,212 on this commit. The notices schema
  * that landed beside it costs nothing here: it is on the lazy `@reticlehq/core/hud` subpath.
  */
+
 /*
  * Raised a fifth time, 233_300 -> 233_400, for a route to be assertable in a SAVED flow. 57 B.
  *
