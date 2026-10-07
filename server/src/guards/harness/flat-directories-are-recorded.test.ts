@@ -134,6 +134,11 @@ const OVER_THE_LINE: Readonly<Record<string, number>> = {
   // envelope carries to the agent. It needs `ReticleTool`, and `wire/constants` may not reach up
   // into `wire` (the directory-reach guard refused it there).
   'core/src/wire': 20,
+  // 11 with `match-args.ts`: the arguments of the `match` command that only a verdict sets
+  // (`fullText`). It is one small group with a reader on each side of the wire, and nothing else in
+  // `constants.ts` depends on it, so that file is the wrong place for it. Recorded rather than
+  // grouped: every file here is a flat set of wire constants, and this one has no sibling to join.
+  'core/src/wire/constants': 11,
   // 16 since `snapshot-tree.ts`. The snapshot tree is a format the BROWSER writes and several
   // things on the Node side read back, and its parser was living beside the MCP tool handlers — so
   // every other reader imported from the tool surface to parse a string the tool surface does not
