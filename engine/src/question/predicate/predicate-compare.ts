@@ -84,8 +84,12 @@ function redacted(label: string): { result: EvalResult } {
  * different secrets arrive as the same string and would compare equal.
  */
 function asScalar(value: unknown, label: string): Reading {
-  if (REDACTED_VALUE === value) return redacted(label);
-  if (isScalar(value)) return { value, label };
+  if (REDACTED_VALUE === value) {
+    return redacted(label);
+  }
+  if (isScalar(value)) {
+    return { value, label };
+  }
   return unknown(
     `${label} is ${Array.isArray(value) ? 'an array' : 'an object'}, not a single value — point the path at one field inside it`,
   );
@@ -139,7 +143,9 @@ function readNet(
           `the body is not a JSON object, so ${label} names no field — compare reads JSON fields`,
         );
   }
-  if (redactedOnPath(payload, source.path)) return redacted(label);
+  if (redactedOnPath(payload, source.path)) {
+    return redacted(label);
+  }
   const field = readField(payload, source.path);
   if (!field.found) {
     if (truncated) {
@@ -174,7 +180,9 @@ function readSignal(
       ? (payload as Record<string, unknown>)
       : undefined;
   // Signal payloads cross the same transport sanitizer as state, so a parent can be redacted too.
-  if (record !== undefined && redactedOnPath(record, source.path)) return redacted(label);
+  if (record !== undefined && redactedOnPath(record, source.path)) {
+    return redacted(label);
+  }
   const field =
     record === undefined ? { found: false, value: undefined } : readField(record, source.path);
   if (!field.found) {
@@ -193,7 +201,9 @@ async function readStore(
     path: source.path,
     ...(source.store === undefined ? {} : { store: source.store }),
   });
-  if (!read.pass) return { result: read };
+  if (!read.pass) {
+    return { result: read };
+  }
   const value = (read.evidence as { value?: unknown } | undefined)?.value;
   return asScalar(value, label);
 }
@@ -214,9 +224,13 @@ async function readText(
     diagnose,
     true,
   );
-  if (!found.pass) return { result: found };
+  if (!found.pass) {
+    return { result: found };
+  }
   const whole = wholeTextOf(found.evidence, source.scope, 'the comparison');
-  if ('result' in whole) return whole;
+  if ('result' in whole) {
+    return whole;
+  }
   return { value: whole.text, label, shown: clipBody(whole.text) };
 }
 
@@ -248,9 +262,12 @@ const NUMBER_TOKEN = /(?:-(?:[\p{Sc}]\s*)?|[\p{Sc}]\s*-?)?(?:\d{1,3}(?:,\d{3})+|
 /** One number out of a reading, or why there is not exactly one. */
 function numberOf(reading: { value: Scalar; shown?: Scalar }): { n: number } | { why: string } {
   const { value } = reading;
-  if ('number' === typeof value)
+  if ('number' === typeof value) {
     return Number.isFinite(value) ? { n: value } : { why: 'is not finite' };
-  if ('string' !== typeof value) return { why: `is ${JSON.stringify(value)}, not a number` };
+  }
+  if ('string' !== typeof value) {
+    return { why: `is ${JSON.stringify(value)}, not a number` };
+  }
   const tokens = value.match(NUMBER_TOKEN) ?? [];
   const [only] = tokens;
   if (1 !== tokens.length || only === undefined) {
@@ -278,7 +295,9 @@ function numberOf(reading: { value: Scalar; shown?: Scalar }): { n: number } | {
 const LAST_PLACE_NOISE = 2 * Number.EPSILON;
 
 function closeEnough(a: number, b: number, tolerance: number): boolean {
-  if (a === b) return true;
+  if (a === b) {
+    return true;
+  }
   return Math.abs(a - b) <= tolerance + LAST_PLACE_NOISE * Math.max(Math.abs(a), Math.abs(b));
 }
 
@@ -315,7 +334,9 @@ export async function evalCompare(
       return { pass: false, failureReason: why, inconclusive: why, evidence };
     }
     const tolerance = p.tolerance ?? 0;
-    if (closeEnough(a.n, b.n, tolerance)) return { pass: true, evidence };
+    if (closeEnough(a.n, b.n, tolerance)) {
+      return { pass: true, evidence };
+    }
     const band = 0 === tolerance ? '' : ` (tolerance ${String(tolerance)})`;
     return {
       pass: false,
@@ -326,7 +347,9 @@ export async function evalCompare(
       evidence,
     };
   }
-  if (left.value === right.value) return { pass: true, evidence };
+  if (left.value === right.value) {
+    return { pass: true, evidence };
+  }
   const numeric = numberOf(left);
   const other = numberOf(right);
   const hint =

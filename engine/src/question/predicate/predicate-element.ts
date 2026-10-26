@@ -79,10 +79,14 @@ export const HTML_TAG_TO_ARIA_ROLE = new Map([
  * Context-dependent tags state the condition so the hint is never wrong.
  */
 function describeUnreachableRole(role: string | undefined): string | undefined {
-  if (role === undefined) return undefined;
+  if (role === undefined) {
+    return undefined;
+  }
   const tag = role.toLowerCase();
   const ariaRole = HTML_TAG_TO_ARIA_ROLE.get(tag);
-  if (ariaRole === undefined) return undefined;
+  if (ariaRole === undefined) {
+    return undefined;
+  }
   if ('section' === tag) {
     return (
       `'section' is not an ARIA role — ` +
@@ -116,7 +120,9 @@ function describeUnreachableRole(role: string | undefined): string | undefined {
  * unexamined, not absent. Empty when nothing was cut, so an ordinary miss keeps the message it had.
  */
 function describePresentTestidsCut(shown: number, total: number | undefined): string {
-  if (total === undefined || total <= shown) return '';
+  if (total === undefined || total <= shown) {
+    return '';
+  }
   return ` (the present-testid list shows the first ${String(shown)} of ${String(total)} in document order — absence from it proves nothing)`;
 }
 
@@ -136,7 +142,9 @@ function describeAbsentMiss(match: MatchResult, state: ElementState | undefined)
     match.elements.length > 0 &&
     match.elements.length === match.count &&
     match.elements.every((element) => !element.visible);
-  if (!allDescribedHidden) return found;
+  if (!allDescribedHidden) {
+    return found;
+  }
   const which = 1 === match.count ? 'it is' : 'every one is';
   return (
     `${found}, but ${which} hidden — \`absent\` means removed from the DOM; ` +
@@ -179,7 +187,9 @@ async function matchOnce(
     ...(true === diagnose ? { diagnose: true } : {}),
     ...(fullText ? { [MatchArg.FULL_TEXT]: true } : {}),
   });
-  if (!res.ok) return { matched: false, count: 0, elements: [] };
+  if (!res.ok) {
+    return { matched: false, count: 0, elements: [] };
+  }
   return (res.result ?? { matched: false, count: 0, elements: [] }) as MatchResult;
 }
 
@@ -216,11 +226,15 @@ function substantiveMatches(
     query.name === undefined &&
     query.text === undefined &&
     query.testid === undefined;
-  if (!bareRole || !ANNOUNCEMENT_ROLES.has(query.role ?? '')) return elements;
+  if (!bareRole || !ANNOUNCEMENT_ROLES.has(query.role ?? '')) {
+    return elements;
+  }
   // Nothing described, nothing to judge. `elements` is only the described PREFIX of a match — the
   // browser truncates it, and it can be empty while `count` is not. Calling that hollow would turn a
   // truncation into a verdict, so an unjudgeable set keeps the old answer.
-  if (0 === elements.length) return elements;
+  if (0 === elements.length) {
+    return elements;
+  }
   return elements.filter((e) => e.name.length > 0 || (e.text ?? '').trim().length > 0);
 }
 
@@ -244,9 +258,13 @@ function versionParts(version: string): [number, number, number] | undefined {
 function sdkPredates(sdk: string | undefined, since: string): boolean {
   const have = sdk === undefined ? undefined : versionParts(sdk);
   const need = versionParts(since);
-  if (have === undefined || need === undefined) return false;
+  if (have === undefined || need === undefined) {
+    return false;
+  }
   for (let i = 0; i < 3; i += 1) {
-    if (have[i] !== need[i]) return (have[i] ?? 0) < (need[i] ?? 0);
+    if (have[i] !== need[i]) {
+      return (have[i] ?? 0) < (need[i] ?? 0);
+    }
   }
   return false;
 }
@@ -257,7 +275,9 @@ function stateTheSdkPredates(
   state: ElementState | undefined,
 ): { sdk: string; state: ElementState; since: string } | undefined {
   const since = state === undefined ? undefined : ELEMENT_STATE_SINCE[state];
-  if (sdk === undefined || state === undefined || since === undefined) return undefined;
+  if (sdk === undefined || state === undefined || since === undefined) {
+    return undefined;
+  }
   return sdkPredates(sdk, since) ? { sdk, state, since } : undefined;
 }
 
@@ -579,7 +599,9 @@ export async function evalElement(
  */
 /** The text an element descriptor reported, or ''. Never `String(unknown)` — see `show` in property.ts. */
 function textOf(element: unknown): string {
-  if ('object' !== typeof element || null === element) return '';
+  if ('object' !== typeof element || null === element) {
+    return '';
+  }
   const value = (element as { text?: unknown }).text;
   return 'string' === typeof value ? value : '';
 }
@@ -597,7 +619,9 @@ export function joinedText(evidence: unknown): string {
  * and judging more must not make it bigger.
  */
 function shownBounded(element: unknown): unknown {
-  if ('object' !== typeof element || null === element) return element;
+  if ('object' !== typeof element || null === element) {
+    return element;
+  }
   const max = TRANSPORT_LIMITS.MAX_DESCRIBED_TEXT;
   const text = textOf(element);
   return text.length > max ? { ...element, text: `${text.slice(0, max)}…` } : element;
@@ -641,10 +665,14 @@ export function withTextProperty(
   subject: string,
   baseline?: Baseline,
 ): EvalResult {
-  if (!base.pass) return base;
+  if (!base.pass) {
+    return base;
+  }
   const matched = Array.isArray(base.evidence) ? base.evidence : [];
   const whole = wholeTextOf(matched, subject, assertion.property);
-  if ('result' in whole) return whole.result;
+  if ('result' in whole) {
+    return whole.result;
+  }
   const { text } = whole;
   const described = matched.map(shownBounded);
   const result = satisfiesProperty(text, assertion, baseline);
@@ -679,7 +707,9 @@ async function nearestByName(
 ): Promise<ElementDescriptor[]> {
   for (const query of [{ label: name }, { placeholder: name }]) {
     const found = await matchOnce(session, query, state);
-    if (found.matched) return found.elements.slice(0, MAX_BY_NAME);
+    if (found.matched) {
+      return found.elements.slice(0, MAX_BY_NAME);
+    }
   }
   return [];
 }

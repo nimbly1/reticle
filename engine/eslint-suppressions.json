@@ -257,19 +257,9 @@
       "count": 4
     }
   },
-  "src/question/predicate/predicate-compare.ts": {
-    "curly": {
-      "count": 11
-    }
-  },
   "src/question/predicate/predicate-console.ts": {
     "curly": {
       "count": 3
-    }
-  },
-  "src/question/predicate/predicate-element.ts": {
-    "curly": {
-      "count": 13
     }
   },
   "src/question/predicate/predicate-eval-kit.ts": {
